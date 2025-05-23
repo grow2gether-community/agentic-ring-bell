@@ -50,9 +50,8 @@ def listen_prompted() -> str:
         print("❌ Could not understand the audio.")
         return ""
 
-
-# GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GOOGLE_API_KEY = "AIzaSyAEtdmoLXDa8B87YT8fUhaCiddvINfn8Ms"
+#save the api key in the environment variable
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # === Session State ===
 class SessionState(TypedDict):
