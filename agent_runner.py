@@ -1,6 +1,7 @@
 from vbot_graph import graph
 from langchain_core.messages import HumanMessage
 from time import sleep
+from face_detection import detect_face_and_greet
 
 def run_agent_for_visitor(name: str, owner_status="home"):
     state = {
@@ -14,14 +15,9 @@ def run_agent_for_visitor(name: str, owner_status="home"):
         state = graph.invoke(state)
 
 # === IMAGE-RECOGNITION TRIGGER ===
-
-def check_camera_for_person():
-    input("📸 Press Enter to simulate 'Subbu' detected...")
-    return "Subbu"
-
 def start_ringbell():
     while True:
-        detected_name = check_camera_for_person()
+        detected_name = detect_face_and_greet()
         if detected_name:
             print(f"Detected: {detected_name}")
             run_agent_for_visitor(detected_name)
