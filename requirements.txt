@@ -1,0 +1,15 @@
+opencv-python
+numpy
+chromadb
+# insightface
+langgraph
+langgraph-prebuilt
+langchain-google-genai
+google-generativeai
+gTTS
+SpeechRecognition
+PyAudio
+pygame
+# simpleaudio
+graphviz
+tqdm

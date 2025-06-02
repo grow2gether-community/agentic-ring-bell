@@ -12,20 +12,41 @@ import tempfile
 from time import sleep
 import speech_recognition as sr
 from gtts import gTTS
-from playsound import playsound
+import pygame
+# from playsound import playsound
+
+# def speak_text(text: str):
+#     """Convert given text to speech, play it, then delete it from disk."""
+# #Create a temporary file
+#     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+#         tts = gTTS(text, lang='en')
+#         tts.save(fp.name)
+#         temp_file = fp.name
+
+#     # Play after generation
+#     playsound(temp_file)
+
+#     # Optional: cleanup
+#     os.remove(temp_file)
+
 
 def speak_text(text: str):
-    """Convert given text to speech, play it, then delete it from disk."""
-#Create a temporary file
+    """Convert text to speech and play using pygame."""
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
-        tts = gTTS(text, lang='en')
+        tts = gTTS(text)
         tts.save(fp.name)
         temp_file = fp.name
 
-    # Play after generation
-    playsound(temp_file)
+    pygame.init()
+    pygame.mixer.init()
+    pygame.mixer.music.load(temp_file)
+    pygame.mixer.music.play()
 
-    # Optional: cleanup
+    while pygame.mixer.music.get_busy():
+        continue
+
+    pygame.mixer.music.stop()
+    pygame.quit()
     os.remove(temp_file)
 
 def listen_prompted() -> str:
@@ -129,7 +150,8 @@ def generate_prompt(owner_status: str) -> tuple:
     return (
         "system",
         f"You are VBot. The owner is currently '{owner_status}'. "
-        "Authenticate people based on name. Ask OTP if the user isknown. "
+        "Authenticate people based on name. Ask OTP if the user is known. "
+        "If the user is 'unknown', tell user that you can't let them in. "
         "Call verify_otp with user_name, otp, and owner_status."
     )
 
