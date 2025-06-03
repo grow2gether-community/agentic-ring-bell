@@ -6,7 +6,6 @@ import chromadb
 from dotenv import load_dotenv
 from chromadb.config import Settings
 from insightface.app import FaceAnalysis
-from vbot_graph import speak_text
 
 # === SETUP ===
 load_dotenv()
@@ -41,7 +40,7 @@ def add_known_face(name, image_path):
     print(f"✅ Added {name}'s face to ChromaDB.")
 
 # Add Subbu's faces from s1.jpg to s12.jpg
-for i in range(1, 13):
+for i in range(1, 4):
     add_known_face("Subbu", f"./s{i}.jpg")
 
 # === Recognize Face ===
@@ -92,12 +91,12 @@ def detect_face_and_greet():
                 emb = face.embedding
                 name, dist = recognize_face(emb)
 
-                if name:
-                    msg = f"Hello {name}, welcome back! You are cleared to enter."
-                else:
-                    msg = "Hello! You're at 215 Peck Avenue. How can I help you today?"
+                # if name:
+                #     msg = f"Hello {name}, welcome back! You are cleared to enter."
+                # else:
+                #     msg = "Hello! You're at 215 Peck Avenue. How can I help you today?"
 
-                speak_text(msg)
+                # speak_text(msg)
                 return name if name else "unknown"
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
