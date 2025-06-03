@@ -1,7 +1,7 @@
 opencv-python
 numpy
 chromadb
-insightface
+# insightface
 langgraph
 langgraph-prebuilt
 langchain-google-genai
@@ -10,6 +10,6 @@ gTTS
 SpeechRecognition
 PyAudio
 pygame
-simpleaudio
+# simpleaudio
 graphviz
 tqdm

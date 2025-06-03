@@ -13,6 +13,22 @@ from time import sleep
 import speech_recognition as sr
 from gtts import gTTS
 import pygame
+# from playsound import playsound
+
+# def speak_text(text: str):
+#     """Convert given text to speech, play it, then delete it from disk."""
+# #Create a temporary file
+#     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+#         tts = gTTS(text, lang='en')
+#         tts.save(fp.name)
+#         temp_file = fp.name
+
+#     # Play after generation
+#     playsound(temp_file)
+
+#     # Optional: cleanup
+#     os.remove(temp_file)
+
 
 def speak_text(text: str):
     """Convert text to speech and play using pygame."""
@@ -72,95 +88,80 @@ USER_DB = {
     "Ravi": ["1234", 3],
 }
 
-# @tool
-# def update_frequency(user_name: str) -> dict:
-#     """Increments frequency count for a verified user."""
-#     user = USER_DB.get(user_name)
-#     if user:
-#         user["frequency"] += 1
-#         return {"frequency_updated": True}
-#     return {"frequency_updated": False}
+def update_frequency(name):
+    USER_DB[name][1] += 1
 
 # === Tools ===
-
 @tool
 def verify_user(user_name: str) -> dict:
     """
-    Verifies if the user exists in the system and provides context like frequency of visits.
+    Checks if the user is in the system.
     """
     user = USER_DB.get(user_name)
     if not user:
-        return {
-            "user_found": False,
-            "frequency": 0,
-            "finished": True
-        }
-
-    return {
-        "user_found": True,
-        "frequency": USER_DB[user_name][1],
-        "finished": False
-    }
+        return {"user_found": False, "message": f"User '{user_name}' not found.", "finished": True}
+    return {"user_found": True, "message": f"Hello {user_name}, you are in the system. Please enter your OTP."}
 
 @tool
-def verify_otp(user_name: str, otp: str) -> dict:
+def verify_otp(user_name: str, otp: str, owner_status: str) -> dict:
     """
-    Verifies the OTP for a user. Returns only whether it was correct.
+    Authenticates user based on OTP and owner's current status.
     """
     user = USER_DB.get(user_name)
     if not user:
-        return {"otp_correct": False, "user_found": False, "finished": True}
+        return {"authenticated": False, "message": "User not found.", "finished": True}
 
-    correct_otp, _ = user
+    correct_otp, freq = user
     if otp != correct_otp:
-        return {"otp_correct": False, "user_found": True, "finished": True}
+        return {"authenticated": False, "message": "Incorrect OTP.", "finished": True}
 
-    # Don't update frequency here — let chatbot decide and call a tool if needed
-    return {"otp_correct": True, "user_found": True, "finished": True}
+    if owner_status == "home":
+        update_frequency(user_name)
+        return {"authenticated": True, "message": f"Welcome {user_name}, come in.", "finished": True}
 
-# # === Graph Setup ===
+    elif owner_status == "away":
+        if freq > 10:
+            update_frequency(user_name)
+            return {"authenticated": True, "message": "Owner is away, but you're trusted. Come in.", "finished": True}
+        else:
+            return {"authenticated": False, "message": "Owner is away. You cannot enter.", "finished": True}
+
+    elif owner_status == "out_of_place":
+        return {"authenticated": False, "message": "Owner is out of place. Access denied.", "finished": True}
+
+    return {"authenticated": False, "message": "Unknown error.", "finished": True}
+
+# === Graph Setup ===
 tools = [verify_user, verify_otp]
 tool_node = ToolNode(tools)
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY)
 llm_with_tools = llm.bind_tools(tools)
 
+# VBOT_SYSINT = (
+#     "system",
+#     "You are VBot. Authenticate people based on name. Ask OTP if known. "
+#     "Respect owner's current status: home, away, or out_of_place. "
+#     "Call verify_otp with user_name, otp, and owner_status."
+# )
+# WELCOME_MSG = "Welcome to VBot. May I know your name?"
 
 def generate_prompt(owner_status: str) -> tuple:
     return (
         "system",
-        f"""You are VBot, a smart and polite voice assistant at the front door.
-        The owner is currently marked as '{owner_status}'.
-
-        You will receive:
-        - A greeting like "My name is X"
-        - Then tool outputs (e.g., user_found, frequency, authenticated, otp_correct, owner_status, finished)
-
-        Based on that:
-        1. If `user_found` is False:
-        → Politely say the user is not recognized and cannot proceed.
-        2. If `user_found` is True:
-        → Greet them based on their `frequency`. If high, make it warmer.
-        3. If `authenticated` is False:
-        → Prompt for the OTP briefly and clearly.
-        4. If `authenticated` is True:
-        → Decide the final response based on `owner_status`:
-            - If 'home' → Welcome them in.
-            - If 'away' and frequency > 10 → Say they're trusted and allowed in.
-            - If 'away' and frequency <= 10 → Say access is denied.
-            - If 'out_of_place' → Say owner is unavailable and entry is denied.
-        5. Keep your tone friendly, professional, and empathetic.
-
-        Your final response must always be **a single, user-friendly sentence**.
-        """
-            )
+        f"You are VBot. The owner is currently '{owner_status}'. "
+        "Authenticate people based on name. Ask OTP if the user is known. "
+        "If the user is 'unknown', tell user that you can't let them in. "
+        "Call verify_otp with user_name, otp, and owner_status."
+    )
 
 def chatbot_with_tools(state: SessionState) -> SessionState:
     VBOT_SYSINT = generate_prompt(state.get("owner_status", "home"))
 
     if state["messages"]:
         new_output = llm_with_tools.invoke([VBOT_SYSINT] + state["messages"])
-
+    else:
+        new_output = AIMessage(content=WELCOME_MSG)
 
     for msg in state["messages"]:
         if isinstance(msg, ToolMessage):
