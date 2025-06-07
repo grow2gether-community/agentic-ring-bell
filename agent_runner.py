@@ -4,12 +4,13 @@ from time import sleep
 from face_detection import detect_face_and_greet
 from vbot_graph import speak_text
 
-def run_agent_for_visitor(name: str, owner_status):
+def run_agent_for_visitor(name: str, owner_status, delivery_expected):
     state = {
         "messages": [HumanMessage(content=f"My name is {name}")],
         "authenticated": False,
         "finished": False,
         "owner_status": owner_status,
+        "delivery_expected": delivery_expected,
         "user_name": name,
         "frequency_updated": False
     }
@@ -34,9 +35,25 @@ def get_owner_status():
             return options[choice]
         print("Invalid option. Please select 1, 2, or 3.")
 
+def get_delivery_expected():
+    options = {
+        "1": True,
+        "2": False
+    }
+    print("Select delivery expected:")
+    print("1. Yes 📦")
+    print("2. No 🚫")
+
+    while True:
+        choice = input("Enter option (1/2): ").strip()
+        if choice in options:
+            return options[choice]
+        print("Invalid option. Please select 1 or 2.")
+
 # === IMAGE-RECOGNITION TRIGGER ===
 def start_ringbell():
     owner_status = get_owner_status()
+    delivery_expected = get_delivery_expected()
     while True:
         detected_name = detect_face_and_greet()
         if detected_name == "Unknown":
@@ -44,7 +61,7 @@ def start_ringbell():
             print("Visitor not recognized. Ending interaction.\n")
             continue
         print(f"Detected: {detected_name}")
-        run_agent_for_visitor(detected_name, owner_status)
+        run_agent_for_visitor(detected_name, owner_status, delivery_expected)
         sleep(5)
 
 if __name__ == "__main__":

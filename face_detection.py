@@ -18,7 +18,14 @@ face_app.prepare(ctx_id=0)
 def normalize(vec):
     return vec / np.linalg.norm(vec)
 
-# === ChromaDB Setup ===
+# === ChromaDB Setup for permenant storage ===
+# client = chromadb.PersistentClient(
+#     path="chroma_db_face_data", 
+#     settings=Settings(anonymized_telemetry=False)
+# )
+# collection = client.get_collection(name="face_embeddings")
+
+# === ChromaDB Setup for in-memory storage ===
 client = chromadb.Client(Settings(anonymized_telemetry=False))
 collection = client.get_or_create_collection(name="face_embeddings", metadata={"hnsw:space": "cosine"})
 
@@ -40,11 +47,11 @@ def add_known_face(name, image_path):
     print(f"✅ Added {name}'s face to ChromaDB.")
 
 # Add Subbu's faces from s1.jpg to s12.jpg
-for i in range(1, 4):
-    add_known_face("Subbu", f"./s{i}.jpg")
+for i in range(1, 9):
+    add_known_face("subbu", f"./subbu{i}.jpg")
 
 # === Recognize Face ===
-def recognize_face(embedding, threshold=0.49):
+def recognize_face(embedding, threshold=0.4):
     embedding = normalize(embedding).tolist()
     results = collection.query(query_embeddings=[embedding], n_results=1)
     if results["distances"][0][0] > threshold:
@@ -65,7 +72,7 @@ def estimate_distance(bbox, known_height=KNOWN_FACE_HEIGHT_CM, focal_length=FOCA
         return float('inf')
     return (known_height * focal_length) / height_px
 
-# === Main Detection Logic ===
+#=== Main Detection Logic ===
 def detect_face_and_greet():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -90,13 +97,7 @@ def detect_face_and_greet():
 
                 emb = face.embedding
                 name, dist = recognize_face(emb)
-
-                # if name:
-                #     msg = f"Hello {name}, welcome back! You are cleared to enter."
-                # else:
-                #     msg = "Hello! You're at 215 Peck Avenue. How can I help you today?"
-
-                # speak_text(msg)
+                print(f"Detected: {name} with distance: {dist}")
                 return name if name else "unknown"
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -104,3 +105,6 @@ def detect_face_and_greet():
 
     cap.release()
     cv2.destroyAllWindows()
+
+
+print(detect_face_and_greet())
