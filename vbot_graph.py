@@ -64,12 +64,14 @@ class SessionState(TypedDict):
     authenticated: bool
     finished: bool
     owner_status: Literal["home", "away", "out_of_place"]
+    delivery_expected: bool
+    frequency_updated: bool
 
 # === Simulated User DB ===
 USER_DB = {
-    "Subbu": ["1234", 9],
-    "Ram": ["1234", 12],
-    "Ravi": ["1234", 3],
+    "subbu": ["1234", 9],
+    "ram": ["1234", 12],
+    "ravi": ["1234", 3],
 }
 
 # @tool
@@ -88,6 +90,7 @@ def verify_user(user_name: str) -> dict:
     """
     Verifies if the user exists in the system and provides context like frequency of visits.
     """
+
     user = USER_DB.get(user_name)
     if not user:
         return {
@@ -118,25 +121,37 @@ def verify_otp(user_name: str, otp: str) -> dict:
     # Don't update frequency here — let chatbot decide and call a tool if needed
     return {"otp_correct": True, "user_found": True, "finished": True}
 
+@tool
+def deliver_message(username: str) -> dict:
+    """Looks for any expected deliveries, if expected delivery is found,
+    it delivers a message to the user, when the user is 'delivery'"""
+    return {"user_found": True, "finished": True}
+
 # # === Graph Setup ===
-tools = [verify_user, verify_otp]
+tools = [verify_user, verify_otp, deliver_message]
 tool_node = ToolNode(tools)
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY)
 llm_with_tools = llm.bind_tools(tools)
 
 
-def generate_prompt(owner_status: str) -> tuple:
+def generate_prompt(owner_status: str, delivery_expected: bool) -> tuple:
     return (
         "system",
         f"""You are VBot, a smart and polite voice assistant at the front door.
-        The owner is currently marked as '{owner_status}'.
+        The owner is currently marked as '{owner_status}', and delivery is expected: '{delivery_expected}'.
 
         You will receive:
         - A greeting like "My name is X"
         - Then tool outputs (e.g., user_found, frequency, authenticated, otp_correct, owner_status, finished)
 
-        Based on that:
+        If user_name is 'delivery_agent':
+        → Deliver a message to the user, by considering the 'delivery_expected' flag.
+        → If delivery_expected is True, deliver a message to the user thats interactive(like you have been waiting for it, thanking the deliver person etc.)
+        → If delivery_expected is False, deliver a message to the user thats shows curiosity about the delivery(like, whats in there, I am excited about it etc,)
+        → You should always tell some fun facts, jokes, or interesting information; ask them politely about their day etc.
+
+        If user_name is not 'delivery_agent':
         1. If `user_found` is False:
         → Politely say the user is not recognized and cannot proceed.
         2. If `user_found` is True:
@@ -150,13 +165,11 @@ def generate_prompt(owner_status: str) -> tuple:
             - If 'away' and frequency <= 10 → Say access is denied.
             - If 'out_of_place' → Say owner is unavailable and entry is denied.
         5. Keep your tone friendly, professional, and empathetic.
-
-        Your final response must always be **a single, user-friendly sentence**.
         """
             )
 
 def chatbot_with_tools(state: SessionState) -> SessionState:
-    VBOT_SYSINT = generate_prompt(state.get("owner_status", "home"))
+    VBOT_SYSINT = generate_prompt(state.get("owner_status", "home"), state.get("delivery_expected", False))
 
     if state["messages"]:
         new_output = llm_with_tools.invoke([VBOT_SYSINT] + state["messages"])
@@ -186,6 +199,7 @@ def human_node(state: SessionState) -> SessionState:
     user_input = listen_prompted()
     print("User:", user_input)
     return state | {"messages": [HumanMessage(content=user_input)]}
+
 
 def route_from_chatbot(state: SessionState) -> str:
     if state.get("finished"):
