@@ -1,5 +1,6 @@
 import os
 from typing import Annotated, Literal
+from dotenv import load_dotenv
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -9,11 +10,11 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
 import json
 import tempfile
-from time import sleep
 import speech_recognition as sr
 from gtts import gTTS
 import pygame
 
+load_dotenv()
 def speak_text(text: str):
     """Convert text to speech and play using pygame."""
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
@@ -55,8 +56,8 @@ def listen_prompted() -> str:
         print("❌ Could not understand the audio.")
         return ""
 
-#save the api key in the environment variable
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+# #save the api key in the environment variable
+api_key = os.getenv("GOOGLE_API_KEY")
 
 # === Session State ===
 class SessionState(TypedDict):
@@ -130,8 +131,7 @@ def deliver_message(username: str) -> dict:
 # # === Graph Setup ===
 tools = [verify_user, verify_otp, deliver_message]
 tool_node = ToolNode(tools)
-
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY)
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=api_key)
 llm_with_tools = llm.bind_tools(tools)
 
 
