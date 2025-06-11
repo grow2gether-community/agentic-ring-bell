@@ -13,52 +13,72 @@ import tempfile
 import speech_recognition as sr
 from gtts import gTTS
 import pygame
+import time
 
 load_dotenv()
+
+# --- speak_text and listen_for_audio_once are utility functions for app.py ---
 def speak_text(text: str):
     """Convert text to speech and play using pygame."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
-        tts = gTTS(text)
-        tts.save(fp.name)
-        temp_file = fp.name
+    if not text:
+        print("Warning: speak_text called with empty text. Skipping audio.")
+        return
 
-    pygame.init()
-    pygame.mixer.init()
-    pygame.mixer.music.load(temp_file)
-    pygame.mixer.music.play()
+    temp_file = os.path.join(tempfile.gettempdir(), f"vbot_audio_{os.getpid()}_{time.time_ns()}.mp3")
 
-    while pygame.mixer.music.get_busy():
-        continue
+    try:
+        tts = gTTS(text, lang='en')
+        tts.save(temp_file)
 
-    pygame.mixer.music.stop()
-    pygame.quit()
-    os.remove(temp_file)
+        pygame.init()
+        pygame.mixer.init()
+        pygame.mixer.music.load(temp_file)
+        pygame.mixer.music.play()
 
-def listen_prompted() -> str:
-    """Prompt user to press Enter to start and stop recording, then transcribe."""
+        while pygame.mixer.music.get_busy():
+            pygame.time.Clock().tick(10)
+            continue
+    except pygame.error as e:
+        print(f"Pygame audio error: {e}. Skipping audio playback.")
+    except Exception as e:
+        print(f"Error during speak_text: {e}")
+    finally:
+        if pygame.mixer.get_init():
+            pygame.mixer.music.stop()
+            pygame.quit()
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+
+def listen_for_audio_once() -> str:
+    """Listen for a short duration and transcribe audio."""
     recognizer = sr.Recognizer()
     mic = sr.Microphone()
 
-    input("🎤 Press Enter to start recording your response...")
-    print("Recording... Press Enter again when done.")
-    
+    print("Recording audio... (Check terminal for status)")
     with mic as source:
-        recognizer.adjust_for_ambient_noise(source)
-        audio = recognizer.listen(source)
-    
-    input("🛑 Recording stopped. Press Enter to process.")
+        recognizer.adjust_for_ambient_noise(source, duration=1)
+        try:
+            audio = recognizer.listen(source, timeout=7, phrase_time_limit=15)
+        except sr.WaitTimeoutError:
+            print("No speech detected within the timeout.")
+            return ""
+        except Exception as e:
+            print(f"Microphone listening error: {e}")
+            return ""
 
+    print("Processing audio...")
     try:
         result = recognizer.recognize_google(audio)
-        print(f"You said: {result}")
         return result.strip()
     except sr.UnknownValueError:
-        print("❌ Could not understand the audio.")
-        return ""
+        print("❌ Could not understand the audio. Please try again.")
+    except sr.RequestError as e:
+        print(f"❌ Could not request results from Google Speech Recognition service; {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred during transcription: {e}")
+    return ""
 
-# #save the api key in the environment variable
 api_key = os.getenv("GOOGLE_API_KEY")
-
 # === Session State ===
 class SessionState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -67,69 +87,26 @@ class SessionState(TypedDict):
     owner_status: Literal["home", "away", "out_of_place"]
     delivery_expected: bool
     frequency_updated: bool
+    waiting_for_human: bool 
 
 # === Simulated User DB ===
 USER_DB = {
     "subbu": ["1234", 9],
     "ram": ["1234", 12],
     "ravi": ["1234", 3],
+    "delivery_agent": ["", 0],
 }
 
-# @tool
-# def update_frequency(user_name: str) -> dict:
-#     """Increments frequency count for a verified user."""
-#     user = USER_DB.get(user_name)
-#     if user:
-#         user["frequency"] += 1
-#         return {"frequency_updated": True}
-#     return {"frequency_updated": False}
-
 # === Tools ===
-
-@tool
-def verify_user(user_name: str) -> dict:
-    """
-    Verifies if the user exists in the system and provides context like frequency of visits.
-    """
-
-    user = USER_DB.get(user_name)
-    if not user:
-        return {
-            "user_found": False,
-            "frequency": 0,
-            "finished": True
-        }
-
-    return {
-        "user_found": True,
-        "frequency": USER_DB[user_name][1],
-        "finished": False
-    }
-
-@tool
-def verify_otp(user_name: str, otp: str) -> dict:
-    """
-    Verifies the OTP for a user. Returns only whether it was correct.
-    """
-    user = USER_DB.get(user_name)
-    if not user:
-        return {"otp_correct": False, "user_found": False, "finished": True}
-
-    correct_otp, _ = user
-    if otp != correct_otp:
-        return {"otp_correct": False, "user_found": True, "finished": True}
-
-    # Don't update frequency here — let chatbot decide and call a tool if needed
-    return {"otp_correct": True, "user_found": True, "finished": True}
-
 @tool
 def deliver_message(username: str) -> dict:
     """Looks for any expected deliveries, if expected delivery is found,
-    it delivers a message to the user, when the user is 'delivery'"""
+    it delivers a message to the user, when the user is 'delivery_agent'"""
     return {"user_found": True, "finished": True}
 
-# # === Graph Setup ===
-tools = [verify_user, verify_otp, deliver_message]
+
+# === Graph Setup ===
+tools = [deliver_message]
 tool_node = ToolNode(tools)
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=api_key)
 llm_with_tools = llm.bind_tools(tools)
@@ -141,81 +118,105 @@ def generate_prompt(owner_status: str, delivery_expected: bool) -> tuple:
         f"""You are VBot, a smart and polite voice assistant at the front door.
         The owner is currently marked as '{owner_status}', and delivery is expected: '{delivery_expected}'.
 
-        You will receive:
-        - A greeting like "My name is X"
-        - Then tool outputs (e.g., user_found, frequency, authenticated, otp_correct, owner_status, finished)
+        You will receive a greeting like "My name is X". Based on the name:
 
-        If user_name is 'delivery_agent':
-        → Deliver a message to the user, by considering the 'delivery_expected' flag.
-        → If delivery_expected is True, deliver a message to the user thats interactive(like you have been waiting for it, thanking the deliver person etc.)
-        → If delivery_expected is False, deliver a message to the user thats shows curiosity about the delivery(like, whats in there, I am excited about it etc,)
-        → You should always tell some fun facts, jokes, or interesting information; ask them politely about their day etc.
+        1. If name is 'delivery_agent':
+        → If delivery_expected is True: Deliver an interactive message (e.g., "We've been waiting for this delivery!")
+        → If delivery_expected is False: Show curiosity about the delivery (e.g., "What's in the package?")
+        → Always be friendly and engaging - share fun facts, ask about their day, etc.
 
-        If user_name is not 'delivery_agent':
-        1. If `user_found` is False:
-        → Politely say the user is not recognized and cannot proceed.
-        2. If `user_found` is True:
-        → Greet them based on their `frequency`. If high, make it warmer.
-        3. If `authenticated` is False:
-        → Prompt for the OTP briefly and clearly.
-        4. If `authenticated` is True:
-        → Decide the final response based on `owner_status`:
-            - If 'home' → Welcome them in.
-            - If 'away' and frequency > 10 → Say they're trusted and allowed in.
-            - If 'away' and frequency <= 10 → Say access is denied.
-            - If 'out_of_place' → Say owner is unavailable and entry is denied.
-        5. Keep your tone friendly, professional, and empathetic.
+        2. If name is 'unknown':
+        → Politely say you couldn't recognize them and cannot proceed.
+        → Keep the tone professional but firm.
+
+        3. For any other name (recognized person):
+        → Greet them warmly by name
+        → Based on owner_status:
+            - If 'home': Welcome them in
+            - If 'away': Say the owner is not home and entry is denied
+            - If 'out_of_place': Say the owner is unavailable and entry is denied
+        → Keep your tone friendly and professional
+
+        Always maintain a polite and professional demeanor while being clear about access decisions.
         """
-            )
+    )
 
 def chatbot_with_tools(state: SessionState) -> SessionState:
     VBOT_SYSINT = generate_prompt(state.get("owner_status", "home"), state.get("delivery_expected", False))
 
-    if state["messages"]:
-        new_output = llm_with_tools.invoke([VBOT_SYSINT] + state["messages"])
-
-
+    print("\nDEBUG: Current messages in state (chatbot_with_tools entry):")
     for msg in state["messages"]:
+        if isinstance(msg, HumanMessage):
+            print(f"Human: {msg.content}")
+        elif isinstance(msg, AIMessage):
+            print(f"AI: {msg.content}")
+            if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                print(f"Tool calls: {msg.tool_calls}")
+        elif isinstance(msg, ToolMessage):
+            print(f"Tool: {msg.content}")
+
+    new_output = llm_with_tools.invoke([VBOT_SYSINT] + state["messages"])
+
+    print("\nDEBUG: New output from LLM (chatbot_with_tools):")
+    if isinstance(new_output, AIMessage):
+        print(f"Content: {new_output.content}")
+        if hasattr(new_output, 'tool_calls') and new_output.tool_calls:
+            print(f"Tool calls: {new_output.tool_calls}")
+
+    if isinstance(new_output, AIMessage) and not new_output.content:
+        if hasattr(new_output, 'tool_calls') and new_output.tool_calls:
+            pass
+        else:
+            new_output.content = "I apologize, I seem to have lost my thought. Could you please repeat that or tell me more?"
+            print("DEBUG: LLM produced empty content without tool calls. Applying fallback.")
+
+    new_state = {**state, "messages": state["messages"] + [new_output]}
+
+    # Process tool messages for state updates
+    for msg in [new_output]:
         if isinstance(msg, ToolMessage):
             try:
-                parsed = json.loads(msg.content)
-                if "authenticated" in parsed:
-                    state["authenticated"] = parsed["authenticated"]
-                if "finished" in parsed:
-                    state["finished"] = parsed["finished"]
-            except:
-                pass
+                tool_output = json.loads(msg.content)
+                if "finished" in tool_output:
+                    new_state["finished"] = tool_output["finished"]
+            except Exception as e:
+                print(f"Error processing tool message: {e}")
 
-    if state.get("finished"):
-        print("Model:", new_output.content)
-        speak_text(new_output.content)
-    return {**state, "messages": state["messages"] + [new_output]}
+    # IMPORTANT: Set finished=True after responding, unless a tool call indicates otherwise
+    if not new_state.get("finished", False):
+        new_state["finished"] = True
+        print("DEBUG: Setting finished=True after chatbot response")
 
-def human_node(state: SessionState) -> SessionState:
-    last_msg = state["messages"][-1]
-    print("Model:", last_msg.content)
-    speak_text(last_msg.content)
-
-    user_input = listen_prompted()
-    print("User:", user_input)
-    return state | {"messages": [HumanMessage(content=user_input)]}
+    print(f"\nDEBUG: Final state (chatbot_with_tools exit) - finished: {new_state.get('finished')}")
+    return new_state
 
 
 def route_from_chatbot(state: SessionState) -> str:
-    if state.get("finished"):
+    print(f"\nDEBUG: route_from_chatbot called. Current state finished: {state.get('finished')}")
+
+    if state.get("finished", False):
+        print("DEBUG: Graph state finished is True, routing to END.")
         return END
+    
     last_msg = state["messages"][-1]
-    if hasattr(last_msg, "tool_calls") and len(last_msg.tool_calls) > 0:
+    
+    # If the last message has tool calls, route to tools
+    if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+        print("DEBUG: Last message has tool calls, routing to tools.")
         return "tools"
-    return "human"
+    
+    # Default routing: if not finished and no tools, continue through the chatbot node
+    print("DEBUG: Default routing to chatbot.")
+    return "chatbot"
+
 
 # === Build Graph ===
 graph_builder = StateGraph(SessionState)
 graph_builder.add_node("chatbot", chatbot_with_tools)
 graph_builder.add_node("tools", tool_node)
-graph_builder.add_node("human", human_node)
+graph_builder.add_edge(START, "chatbot")
 graph_builder.add_conditional_edges("chatbot", route_from_chatbot)
 graph_builder.add_edge("tools", "chatbot")
-graph_builder.add_edge("human", "chatbot")
-graph_builder.add_edge(START, "chatbot")
+graph_builder.add_edge("chatbot", END)
+
 graph = graph_builder.compile()
