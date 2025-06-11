@@ -1,53 +1,147 @@
-# 🛎️ Agentic Ring Bell - Face Recognition Voice Assistant
+# Agentic Ringbell AI System
 
-A voice-interactive smart doorbell system using face recognition and an AI agent built with LangGraph. It greets known visitors, handles conversations, and supports secure access automation.
+An intelligent doorbell system that uses face recognition and AI to interact with visitors. The system can recognize known faces, handle deliveries, and provide appropriate responses based on the owner's status.
 
----
+## Features
 
-## 📦 Features
+### Face Recognition
+- Real-time face detection and recognition
+- Face enrollment system with multiple image support
+- Automatic face grouping to avoid duplicates
+- Face database management (rename/delete entries)
+- Confidence-based recognition with suggestions
 
-- 👤 Real-time face recognition using InsightFace + ChromaDB
-- 🗣️ Speech-to-speech interaction using `speech_recognition` and `gTTS`
-- 🧠 LangGraph agent for decision-making and conversation flow
-- 🔐 Owner-aware logic (e.g., when owner is home vs away)
-- 🧹 Temporary audio cleanup after speaking
-- 🚫 No third-party cloud APIs required for inference
+### Owner Status Management
+- Three states: home, away, out_of_place
+- Delivery expectation flag
+- Real-time status updates
 
----
+### Visitor Interaction
+- Automatic visitor identification
+- Context-aware responses based on:
+  - Visitor identity
+  - Owner's status
+  - Delivery expectations
+- Natural language conversation with visitors
+- Text-to-speech responses
 
-## ⚙️ Prerequisites
+### User Interface
+- Clean, modern Streamlit interface
+- Real-time webcam feed
+- Live chat display
+- System status monitoring
+- Face management dashboard
+- Scrollable enrolled people list
 
-### 🧠 Python
+## Installation
 
-- Python 3.10 or 3.11 (recommended)
-- Virtual environment strongly recommended
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/agentic-ring-bell.git
+cd agentic-ring-bell
+```
 
-### 💾 Required Packages
+2. Create and activate a virtual environment:
+```bash
+python -m venv .venv
+# On Windows
+.venv\Scripts\activate
+# On Unix or MacOS
+source .venv/bin/activate
+```
 
-Install all dependencies via:
-
+3. Install the required packages:
 ```bash
 pip install -r requirements.txt
+```
 
-## ⚠️ Windows Users – C++ Build Tools Required
+4. Create a `.env` file in the project root and add your API keys:
+```
+OPENAI_API_KEY=your_openai_api_key
+```
 
-If you're on **Windows**, you need to install Microsoft C++ Build Tools before installing `insightface` or `simpleaudio`.
+## Usage
 
-🛠️ These libraries depend on native C++ compilation during installation.
+1. Start the application:
+```bash
+streamlit run app.py
+```
 
-### 📥 Install Instructions
+2. Initial Setup:
+   - The system will initialize the face recognition models
+   - Set your owner status (home/away/out_of_place)
+   - Toggle delivery expectation if needed
 
-1. Download from: [https://visualstudio.microsoft.com/visual-cpp-build-tools/](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-2. Run the installer
-3. Select the **C++ build tools** workload
-4. Under optional components, check ✅ **C++ CMake tools for Windows**
-5. Click Install
-6. Restart your machine
+3. Face Enrollment:
+   - Click "Enroll New Faces" in the Face Management section
+   - Upload one or more images containing faces
+   - The system will detect and group unique faces
+   - Label each detected face
+   - Skip any unrecognizable faces
 
-> Skipping this step will cause build errors during `pip install`.
+4. Managing Enrolled People:
+   - Click "Manage Enrolled People" to view all enrolled faces
+   - Rename entries using the text input
+   - Delete entries using the delete button
+   - View the number of photos per person
 
+5. Starting the System:
+   - Click "Start Ringbell Detection" to begin monitoring
+   - The webcam will activate and start detecting faces
+   - When a visitor is detected, the system will:
+     - Identify the person
+     - Start a conversation based on their identity
+     - Provide appropriate responses
 
-Once setup is complete, run:
+6. Conversation Flow:
+   - For recognized visitors: Greeting and access information
+   - For delivery agents: Delivery handling instructions
+   - For unknown visitors: Appropriate response based on owner status
 
-> python agent_runner.py
+7. Stopping the System:
+   - Click "Stop System" to end monitoring
+   - The webcam will deactivate
+   - All states will be reset
+
+## System Requirements
+
+- Python 3.8 or higher
+- Webcam
+- Internet connection (for OpenAI API)
+- Sufficient disk space for face database
+
+## Dependencies
+
+The system uses several key libraries:
+- Streamlit for the web interface
+- OpenCV for image processing
+- InsightFace for face recognition
+- LangChain for AI conversation
+- ChromaDB for face database
+- OpenAI for natural language processing
+
+## Troubleshooting
+
+1. Camera Issues:
+   - Ensure no other application is using the webcam
+   - Check camera permissions
+   - Try restarting the application
+
+2. Face Recognition Issues:
+   - Ensure good lighting
+   - Clear, front-facing images for enrollment
+   - Multiple angles for better recognition
+
+3. API Issues:
+   - Verify your OpenAI API key
+   - Check internet connection
+   - Ensure sufficient API credits
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
 

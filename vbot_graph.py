@@ -14,10 +14,8 @@ import speech_recognition as sr
 from gtts import gTTS
 import pygame
 import time
-import uuid
 
 load_dotenv()
-
 
 # --- speak_text and listen_for_audio_once are utility functions for app.py ---
 def speak_text(text: str):
@@ -51,7 +49,6 @@ def speak_text(text: str):
         if os.path.exists(temp_file):
             os.remove(temp_file)
 
-
 def listen_for_audio_once() -> str:
     """Listen for a short duration and transcribe audio."""
     recognizer = sr.Recognizer()
@@ -81,10 +78,7 @@ def listen_for_audio_once() -> str:
         print(f"An unexpected error occurred during transcription: {e}")
     return ""
 
-
 api_key = os.getenv("GOOGLE_API_KEY")
-
-
 # === Session State ===
 class SessionState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -95,7 +89,6 @@ class SessionState(TypedDict):
     frequency_updated: bool
     waiting_for_human: bool 
 
-
 # === Simulated User DB ===
 USER_DB = {
     "subbu": ["1234", 9],
@@ -104,9 +97,7 @@ USER_DB = {
     "delivery_agent": ["", 0],
 }
 
-
 # === Tools ===
-
 @tool
 def deliver_message(username: str) -> dict:
     """Looks for any expected deliveries, if expected delivery is found,
@@ -223,11 +214,9 @@ def route_from_chatbot(state: SessionState) -> str:
 graph_builder = StateGraph(SessionState)
 graph_builder.add_node("chatbot", chatbot_with_tools)
 graph_builder.add_node("tools", tool_node)
-
 graph_builder.add_edge(START, "chatbot")
 graph_builder.add_conditional_edges("chatbot", route_from_chatbot)
 graph_builder.add_edge("tools", "chatbot")
-# Add direct edge to END when finished
 graph_builder.add_edge("chatbot", END)
 
 graph = graph_builder.compile()
