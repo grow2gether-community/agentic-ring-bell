@@ -24,10 +24,40 @@ from face_detection import get_camera_feed_and_detect
 st.set_page_config(
     page_title="Agentic Ringbell AI",
     page_icon="🔔",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-st.title("🔔 Agentic Ringbell AI System")
+# Custom CSS for better UI
+st.markdown("""
+    <style>
+    .main {
+        padding: 0rem 1rem;
+    }
+    .stButton>button {
+        width: 100%;
+    }
+    .status-box {
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+    }
+    .status-active {
+        background-color: #e6ffe6;
+        border: 1px solid #00cc00;
+    }
+    .status-inactive {
+        background-color: #ffe6e6;
+        border: 1px solid #cc0000;
+    }
+    .face-preview {
+        border: 2px solid #ccc;
+        border-radius: 0.5rem;
+        padding: 0.5rem;
+        margin: 0.5rem 0;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # --- Initialize Session State ---
 # This block ensures all necessary session state variables are initialized when the app starts
@@ -64,6 +94,10 @@ if "chat_scroll_to_bottom" not in st.session_state:
     st.session_state.chat_scroll_to_bottom = False
 if "user_text_input_key" not in st.session_state:
     st.session_state.user_text_input_key = 0  # To clear text input after sending
+if "unique_faces_for_labeling" not in st.session_state:
+    st.session_state.unique_faces_for_labeling = []
+if "current_enrollment_index" not in st.session_state:
+    st.session_state.current_enrollment_index = 0
 
 
 # --- System Initialization ---
@@ -144,61 +178,89 @@ def run_streamlit_enrollment_workflow():
             os.makedirs(CROPPED_FACES_DIR)
 
         SESSION_GROUPING_DISTANCE_THRESHOLD = 0.35  # Threshold for grouping similar faces within a session
-        DB_SUGGESTION_RECOGNITION_THRESHOLD = 0.55  # Threshold for suggesting names from the existing DB
+        DB_SUGGESTION_RECOGNITION_THRESHOLD = 0.55
 
         with st.spinner("Detecting faces in uploaded images..."):
             for uploaded_file in uploaded_files:
-                # Read image bytes and decode using OpenCV
-                file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-                img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+                try:
+                    # Read image bytes and decode using OpenCV
+                    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+                    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-                if img is None:
-                    st.warning(f"Could not read image: {uploaded_file.name}")
-                    continue
-
-                # Detect faces in the image
-                for face_obj in st.session_state.face_app.get(img):
-                    emb_norm_np = normalize_embedding(face_obj.embedding)
-                    if emb_norm_np is None:
+                    if img is None:
+                        st.warning(f"Could not read image: {uploaded_file.name}")
                         continue
 
-                    # Check if this face is already processed in the current session
-                    is_new_in_session = all(
-                        1 - np.dot(emb_norm_np, np.array(uf['embedding'])) > SESSION_GROUPING_DISTANCE_THRESHOLD
-                        for uf in session_unique_faces
-                    )
+                    # Detect faces in the image
+                    faces = st.session_state.face_app.get(img)
+                    if not faces:
+                        st.warning(f"No faces detected in {uploaded_file.name}")
+                        continue
 
-                    if is_new_in_session:
-                        # Attempt to recognize the face against the existing database for suggestions
-                        name_from_db, dist_from_db = recognize_face(
-                            collection=st.session_state.collection,
-                            embedding=face_obj.embedding,
-                            threshold=DB_SUGGESTION_RECOGNITION_THRESHOLD
-                        )
+                    for face_obj in faces:
+                        try:
+                            emb_norm_np = normalize_embedding(face_obj.embedding)
+                            if emb_norm_np is None:
+                                continue
 
-                        # Crop the face and save it temporarily
-                        bbox = face_obj.bbox.astype(int)
-                        padding = 20
-                        x1, y1 = max(0, bbox[0] - padding), max(0, bbox[1] - padding)
-                        x2, y2 = min(img.shape[1], bbox[2] + padding), min(img.shape[0], img.shape[3] + padding)
-                        crop_filename = os.path.join(CROPPED_FACES_DIR, f"session_unique_{uuid.uuid4().hex[:6]}.jpg")
-                        cv2.imwrite(crop_filename, img[y1:y2, x1:x2])
+                            # Check if this face is already processed in the current session
+                            is_new_in_session = all(
+                                1 - np.dot(emb_norm_np, np.array(uf['embedding'])) > SESSION_GROUPING_DISTANCE_THRESHOLD
+                                for uf in session_unique_faces
+                            )
 
-                        session_unique_faces.append({
-                            'embedding': emb_norm_np.tolist(),
-                            'crop_path': crop_filename,
-                            'db_suggestion': name_from_db,
-                            'db_suggestion_dist': dist_from_db
-                        })
+                            if is_new_in_session:
+                                # Attempt to recognize the face against the existing database for suggestions
+                                name_from_db, dist_from_db = recognize_face(
+                                    collection=st.session_state.collection,
+                                    embedding=face_obj.embedding,
+                                    threshold=DB_SUGGESTION_RECOGNITION_THRESHOLD
+                                )
+
+                                # Crop the face and save it temporarily
+                                bbox = face_obj.bbox.astype(int)
+                                padding = 20
+                                x1, y1 = max(0, bbox[0] - padding), max(0, bbox[1] - padding)
+                                x2, y2 = min(img.shape[1], bbox[2] + padding), min(img.shape[0], bbox[3] + padding)
+                                
+                                # Ensure valid crop dimensions
+                                if x2 <= x1 or y2 <= y1:
+                                    st.warning(f"Invalid face crop dimensions in {uploaded_file.name}")
+                                    continue
+
+                                crop_filename = os.path.join(CROPPED_FACES_DIR, f"session_unique_{uuid.uuid4().hex[:6]}.jpg")
+                                face_crop = img[y1:y2, x1:x2]
+                                
+                                if face_crop.size == 0:
+                                    st.warning(f"Empty face crop generated from {uploaded_file.name}")
+                                    continue
+                                
+                                cv2.imwrite(crop_filename, face_crop)
+
+                                session_unique_faces.append({
+                                    'embedding': emb_norm_np.tolist(),
+                                    'crop_path': crop_filename,
+                                    'db_suggestion': name_from_db,
+                                    'db_suggestion_dist': dist_from_db
+                                })
+                        except Exception as face_error:
+                            st.warning(f"Error processing face in {uploaded_file.name}: {str(face_error)}")
+                            continue
+
+                except Exception as img_error:
+                    st.error(f"Error processing image {uploaded_file.name}: {str(img_error)}")
+                    continue
+
         st.session_state.unique_faces_for_labeling = session_unique_faces
         if session_unique_faces:
-            st.success(
-                f"Detected {len(session_unique_faces)} unique face(s) for labeling. Please proceed to label below.")
+            st.success(f"Detected {len(session_unique_faces)} unique face(s) for labeling. Please proceed to label below.")
             st.session_state.current_enrollment_index = 0
             st.session_state.current_phase = "labeling"  # Transition to labeling phase
             st.rerun()  # Trigger rerun to display the labeling UI
         else:
             st.info("No new unique faces detected in uploaded images.")
+            if os.path.exists(CROPPED_FACES_DIR):
+                shutil.rmtree(CROPPED_FACES_DIR)
 
 
 # --- UI for labeling detected faces ---
@@ -225,12 +287,15 @@ def display_labeling_ui():
 
     face_to_label = st.session_state.unique_faces_for_labeling[idx]
     st.subheader(f"Label Face {idx + 1}/{len(st.session_state.unique_faces_for_labeling)}")
-    st.image(face_to_label['crop_path'], caption="Face to Label",
-             use_container_width=True)  # Changed to use_container_width
+    
+    # Display face crop with styling
+    st.markdown('<div class="face-preview">', unsafe_allow_html=True)
+    st.image(face_to_label['crop_path'], use_column_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     suggestion_text = ""
     if face_to_label['db_suggestion'] and face_to_label['db_suggestion'] != 'unknown':
-        suggestion_text = f" (DB Suggests: '{face_to_label['db_suggestion']}' with dist: {face_to_label['db_suggestion_dist']:.3f})"
+        suggestion_text = f" (DB Suggests: '{face_to_label['db_suggestion']}' with confidence: {1 - face_to_label['db_suggestion_dist']:.2%})"
 
     user_label_input = st.text_input(
         f"Who is this?{suggestion_text}",
@@ -255,186 +320,119 @@ def display_labeling_ui():
 
 
 # --- Main Layout Structure ---
-col1, col2 = st.columns([1.5, 1])  # Left column for video and chat, Right column for controls
+st.title("🔔 Agentic Ringbell AI System")
+
+# Create three columns for the main layout
+col1, col2, col3 = st.columns([2, 1, 1])
 
 with col1:
-    st.subheader("Live View & VBot Interaction")
-    # Placeholders for dynamic content, updated during execution
+    # Main video and chat area
+    st.subheader("Live View & Chat")
     video_placeholder = st.empty()
     status_placeholder = st.empty()
-    chat_container = st.container(height=400)  # Define chat_container
-
-    # Display chat messages in the chat window (this loop runs on every rerun)
-    # This initial loop iterates through all messages in chat_messages
+    
+    # Chat container with fixed height and scrolling
+    chat_container = st.container(height=400)
+    
+    # Display chat messages
     with chat_container:
         for msg in st.session_state.chat_messages:
             if isinstance(msg, HumanMessage):
                 with st.chat_message("user"):
                     st.write(msg.content)
-            elif isinstance(msg, AIMessage):
-                # Only display content of AIMessage, not internal tool calls or empty messages
-                if msg.content:  # Only write if there is actual content
-                    with st.chat_message("assistant"):
-                        st.write(msg.content)
-                # Tool calls and Tool messages are internal processing, not conversational output for the user
-                # We do not want to display these in the primary chat window for the user
-            # elif isinstance(msg, ToolMessage):
-            #     # This block is commented out as requested for cleaner UI output
-            #     pass
+            elif isinstance(msg, AIMessage) and msg.content:
+                with st.chat_message("assistant"):
+                    st.write(msg.content)
 
-    # Scroll to bottom after all messages are displayed
-    if st.session_state.chat_scroll_to_bottom:
-        st.markdown("<script>window.scrollBy(0, document.body.scrollHeight);</script>", unsafe_allow_html=True)
-        st.session_state.chat_scroll_to_bottom = False  # Reset flag
-
-    # Dynamic button for user input during conversation phase
-    if st.session_state.current_phase == "conversation" and st.session_state.agent_running:
-        # Check if conversation is NOT finished AND the last message is an AIMessage (AI has spoken and expects human)
-        if st.session_state.vbot_graph_state is not None and \
-                not st.session_state.vbot_graph_state.get("finished", False) and \
-                st.session_state.chat_messages and \
-                isinstance(st.session_state.chat_messages[-1], AIMessage):  # Only show if last message is an AIMessage
-
-            # Retrieve the current graph state to check next steps
-            current_graph_state = st.session_state.vbot_graph_state
-            next_node_options = graph.get_next_steps(current_graph_state)
-
-            # CRITICAL CHECK: If the graph is explicitly routed to 'human', show the text input and send button.
-            if "human" in next_node_options:
-                # Text input for user's response
-                user_text_input = st.text_input(
-                    "Your response:",
-                    key=f"user_text_input_{st.session_state.user_text_input_key}",  # Unique key for text input
-                    on_change=None  # Removed direct on_change, will use button click
-                )
-
-                # Send button
-                if st.button("Send", key="send_text_button"):
-                    if user_text_input:
-                        # Append user message to graph state and chat history
-                        user_message = HumanMessage(content=user_text_input)
-                        current_graph_state["messages"].append(user_message)  # Append to graph state
-                        st.session_state.chat_messages.append(user_message)  # Append for UI display
-                        st.session_state.chat_scroll_to_bottom = True  # Scroll to new message
-
-                        # Clear the text input field
-                        st.session_state.user_text_input_key += 1  # Increment key to clear input
-
-                        # Invoke graph to continue conversation
-                        try:
-                            with status_placeholder.container():
-                                with st.spinner("VBot thinking..."):
-                                    new_graph_state = graph.invoke(current_graph_state)
-
-                            st.session_state.vbot_graph_state = new_graph_state
-                            new_messages_from_graph = [
-                                msg for msg in new_graph_state["messages"]
-                                if msg not in st.session_state.chat_messages
-                            ]
-                            st.session_state.chat_messages.extend(new_messages_from_graph)
-                            st.session_state.chat_scroll_to_bottom = True  # Prepare to scroll chat
-
-                            # Explicitly display new AI messages to chat_container
-                            with chat_container:
-                                for msg in new_messages_from_graph:
-                                    if isinstance(msg, AIMessage):
-                                        if msg.content:
-                                            with st.chat_message("assistant"):
-                                                st.write(msg.content)
-                                            speak_text(msg.content)
-
-                            st.rerun()  # Trigger rerun to update UI
-                        except Exception as e:
-                            st.error(f"Error during agent interaction: {e}")
-                            st.session_state.agent_running = False
-                            st.session_state.current_phase = "setup"
-                            st.stop()
-                    else:
-                        st.warning("Please enter some text.")
-            else:
-                # If next_node is NOT 'human', the graph should auto-progress (tool call or next AI turn)
-                # This state is handled by the auto-processing block below, so no input field here.
-                pass
-        elif st.session_state.vbot_graph_state is not None and st.session_state.vbot_graph_state.get("finished", False):
-            # If conversation is finished, hide interaction elements
-            pass
-
-with col2:  # Sidebar for controls
-    with st.sidebar:
-        st.subheader("System Controls")
-
-        st.markdown("---")
-        st.subheader("Owner Status & Delivery")
-        # Radio buttons for owner status
-        st.session_state.owner_status = st.radio(
-            "Owner Status:",
-            ("home", "away", "out_of_place"),
-            index=("home", "away", "out_of_place").index(st.session_state.owner_status),
-            help="Current status of the house owner."
-        )
-        # Checkbox for delivery expectation
-        st.session_state.delivery_expected = st.checkbox(
-            "Delivery Expected?",
-            value=st.session_state.delivery_expected,
-            help="Check if a delivery is expected today."
-        )
-
-        st.markdown("---")
-        # Display count of recognized persons in the database
-        num_persons = get_unique_person_count(st.session_state.collection) if st.session_state.collection else 0
-        st.metric(label="Recognized Persons in DB", value=num_persons)
-
-        # Button to initiate face enrollment workflow
-        if st.button("Enroll New Faces", key="enroll_faces_button"):
-            st.session_state.current_phase = "enrollment"
-            st.session_state.unique_faces_for_labeling = []  # Clear previous enrollment state
-            st.session_state.current_enrollment_index = 0
+with col2:
+    # System Status and Controls
+    st.subheader("System Status")
+    
+    # Status indicator
+    status_class = "status-active" if st.session_state.camera_active else "status-inactive"
+    status_text = "Active" if st.session_state.camera_active else "Inactive"
+    st.markdown(f"""
+        <div class="status-box {status_class}">
+            <h3>System Status: {status_text}</h3>
+            <p>Current Phase: {st.session_state.current_phase.title()}</p>
+            <p>Owner Status: {st.session_state.owner_status.title()}</p>
+            <p>Delivery Expected: {'Yes' if st.session_state.delivery_expected else 'No'}</p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Control buttons
+    if st.session_state.current_phase not in ["detection", "conversation"]:
+        if st.button("Start Ringbell Detection", type="primary"):
+            st.session_state.current_phase = "detection"
+            st.session_state.agent_running = False
+            st.session_state.chat_messages = []
+            st.session_state.user_text_input_key = 0
+            st.session_state.visitor_name = None
+            st.session_state.vbot_graph_state = None
+            st.session_state.listening_for_user = False
+            st.session_state.conversation_started = False
+            st.session_state.chat_scroll_to_bottom = True
+            
+            if st.session_state.cap is None or not st.session_state.cap.isOpened():
+                st.session_state.cap = cv2.VideoCapture(0)
+                if not st.session_state.cap.isOpened():
+                    st.error("Failed to open webcam. Please check permissions.")
+                    st.session_state.current_phase = "setup"
+                    st.stop()
+            st.session_state.camera_active = True
+            st.rerun()
+    
+    if st.session_state.current_phase in ["detection", "conversation"]:
+        if st.button("Stop System"):
+            st.session_state.current_phase = "setup"
+            st.session_state.agent_running = False
+            st.session_state.listening_for_user = False
+            st.session_state.conversation_started = False
+            st.session_state.camera_active = False
+            st.session_state.chat_scroll_to_bottom = False
+            st.session_state.user_text_input_key = 0
+            
+            if st.session_state.cap is not None and st.session_state.cap.isOpened():
+                st.session_state.cap.release()
+                st.session_state.cap = None
+            st.info("System stopped.")
             st.rerun()
 
-        # Display enrollment or labeling UI based on current phase
-        if st.session_state.current_phase == "enrollment":
-            run_streamlit_enrollment_workflow()
-        elif st.session_state.current_phase == "labeling":
-            display_labeling_ui()
+with col3:
+    # Face Management
+    st.subheader("Face Management")
+    
+    # Display count of recognized persons
+    num_persons = get_unique_person_count(st.session_state.collection) if st.session_state.collection else 0
+    st.metric(label="Recognized Persons", value=num_persons)
+    
+    # Face enrollment button
+    if st.button("Enroll New Faces"):
+        st.session_state.current_phase = "enrollment"
+        st.session_state.unique_faces_for_labeling = []
+        st.session_state.current_enrollment_index = 0
+        st.rerun()
+    
+    # Owner status controls
+    st.markdown("---")
+    st.subheader("Owner Settings")
+    st.session_state.owner_status = st.radio(
+        "Owner Status:",
+        ("home", "away", "out_of_place"),
+        index=("home", "away", "out_of_place").index(st.session_state.owner_status),
+        help="Current status of the house owner."
+    )
+    st.session_state.delivery_expected = st.checkbox(
+        "Delivery Expected?",
+        value=st.session_state.delivery_expected,
+        help="Check if a delivery is expected today."
+    )
 
-        st.markdown("---")
-        # Control buttons for main system (Start/Stop Detection)
-        if st.session_state.current_phase not in ["detection", "conversation"]:  # Only show Start if not active
-            if st.button("Start Ringbell Detection", key="start_detection_button", type="primary"):
-                st.session_state.current_phase = "detection"
-                st.session_state.agent_running = False
-                st.session_state.chat_messages = []
-                st.session_state.user_text_input_key = 0  # Reset text input key
-                st.session_state.visitor_name = None
-                st.session_state.vbot_graph_state = None
-                st.session_state.listening_for_user = False  # Not listening for speech
-                st.session_state.conversation_started = False  # Reset this flag for a new conversation cycle
-                st.session_state.chat_scroll_to_bottom = True  # Reset scroll
-                # Attempt to open the webcam
-                if st.session_state.cap is None or not st.session_state.cap.isOpened():
-                    st.session_state.cap = cv2.VideoCapture(0)  # Index 0 for default webcam
-                    if not st.session_state.cap.isOpened():
-                        st.error("Failed to open webcam. Ensure no other app is using it and permissions are granted.")
-                        st.session_state.current_phase = "setup"  # Revert to setup on camera failure
-                        st.stop()  # Halt current execution
-                st.session_state.camera_active = True
-                st.rerun()  # Trigger rerun to start the detection loop
-
-        if st.session_state.current_phase in ["detection", "conversation"]:  # Show Stop button if active
-            if st.button("Stop Ringbell System", key="stop_detection_button"):
-                st.session_state.current_phase = "setup"
-                st.session_state.agent_running = False
-                st.session_state.listening_for_user = False
-                st.session_state.conversation_started = False  # Reset flag
-                st.session_state.camera_active = False
-                st.session_state.chat_scroll_to_bottom = False  # Reset scroll
-                st.session_state.user_text_input_key = 0  # Reset text input key
-                # Release camera explicitly
-                if st.session_state.cap is not None and st.session_state.cap.isOpened():
-                    st.session_state.cap.release()
-                    st.session_state.cap = None
-                st.info("Ringbell system stopped.")
-                st.rerun()  # Trigger rerun to update UI to setup phase
+# Display enrollment or labeling UI based on current phase
+if st.session_state.current_phase == "enrollment":
+    run_streamlit_enrollment_workflow()
+elif st.session_state.current_phase == "labeling":
+    display_labeling_ui()
 
 # --- Main Application Logic based on current_phase ---
 
@@ -447,66 +445,83 @@ if st.session_state.current_phase == "detection":
 
         # Check if camera is active and opened
         if not st.session_state.camera_active or st.session_state.cap is None or not st.session_state.cap.isOpened():
-            detection_status.update(label="Camera Not Active or Failed to Open", state="error", expanded=True)
-            current_status_text.error(
-                "Camera is not active or failed to open. Check permissions and ensure no other app is using it.")
-            st.session_state.current_phase = "setup"
-            # Ensure camera is released if it was partially opened
-            if st.session_state.cap is not None and st.session_state.cap.isOpened():
-                st.session_state.cap.release()
-                st.session_state.cap = None
-            st.session_state.camera_active = False
-            st.stop()  # Halt current execution
+            try:
+                st.session_state.cap = cv2.VideoCapture(0)
+                if not st.session_state.cap.isOpened():
+                    detection_status.update(label="Camera Not Active or Failed to Open", state="error", expanded=True)
+                    current_status_text.error(
+                        "Camera is not active or failed to open. Check permissions and ensure no other app is using it.")
+                    st.session_state.current_phase = "setup"
+                    st.session_state.camera_active = False
+                    st.stop()
+                st.session_state.camera_active = True
+            except Exception as e:
+                detection_status.update(label="Camera Error", state="error", expanded=True)
+                current_status_text.error(f"Error initializing camera: {str(e)}")
+                st.session_state.current_phase = "setup"
+                st.session_state.camera_active = False
+                st.stop()
 
         # Get a single frame from the camera and perform detection
-        frame_data, detected_name, status_message = get_camera_feed_and_detect(
-            st.session_state.face_app, st.session_state.collection, st.session_state.cap
-        )
+        try:
+            frame_data, detected_name, status_message = get_camera_feed_and_detect(
+                st.session_state.face_app, st.session_state.collection, st.session_state.cap
+            )
 
-        if frame_data:
-            video_output.image(frame_data, channels="BGR", use_container_width=True)  # Changed to use_container_width
-            current_status_text.text(status_message)
-            detection_status.update(label=f"Camera Active: {status_message}", state="running", expanded=True)
+            if frame_data:
+                video_output.image(frame_data, channels="BGR", use_container_width=True)
+                current_status_text.text(status_message)
+                detection_status.update(label=f"Camera Active: {status_message}", state="running", expanded=True)
 
-            if detected_name:
-                st.session_state.visitor_name = detected_name
-                st.session_state.current_phase = "conversation"
-                st.session_state.agent_running = True
-                st.session_state.conversation_started = False  # Reset for fresh conversation start
-                st.session_state.chat_scroll_to_bottom = True  # Prepare to scroll chat
-                detection_status.update(label=f"Visitor identified: {detected_name}. Starting VBot conversation.",
-                                        state="complete", expanded=False)
-                # Release camera as detection phase is ending
-                if st.session_state.cap is not None and st.session_state.cap.isOpened():
-                    st.session_state.cap.release()
-                    st.session_state.cap = None
-                st.session_state.camera_active = False
-                st.rerun()  # Trigger rerun to switch to conversation phase
+                if detected_name:
+                    st.session_state.visitor_name = detected_name
+                    st.session_state.current_phase = "conversation"
+                    st.session_state.agent_running = True
+                    st.session_state.conversation_started = False
+                    st.session_state.chat_scroll_to_bottom = True
+                    detection_status.update(label=f"Visitor identified: {detected_name}. Starting VBot conversation.",
+                                            state="complete", expanded=False)
+                    # Release camera as detection phase is ending
+                    if st.session_state.cap is not None and st.session_state.cap.isOpened():
+                        st.session_state.cap.release()
+                        st.session_state.cap = None
+                    st.session_state.camera_active = False
+                    st.rerun()
+                else:
+                    # If no face detected, wait 5 seconds before next attempt
+                    time.sleep(5)
+                    st.rerun()
             else:
-                time.sleep(0.01)  # Small delay to prevent burning CPU
-                st.rerun()  # Force rerun to get the next frame and continue detection
-        else:
-            # Handle cases where frame_data is None (e.g., webcam error or encoding error)
-            detection_status.update(label=f"Detection Error: {status_message}", state="error", expanded=True)
-            current_status_text.error(status_message)
-            st.session_state.current_phase = "setup"
-            # Ensure camera is released on error
-            if st.session_state.cap is not None and st.session_state.cap.isOpened():
-                st.session_state.cap.release()
-                st.session_state.cap = None
-            st.session_state.camera_active = False
-            st.stop()
+                # Handle cases where frame_data is None
+                detection_status.update(label=f"Detection Error: {status_message}", state="error", expanded=True)
+                current_status_text.error(status_message)
+                # Don't stop the detection phase, just wait and retry
+                time.sleep(5)
+                st.rerun()
 
+        except Exception as e:
+            detection_status.update(label="Detection Error", state="error", expanded=True)
+            current_status_text.error(f"Error during detection: {str(e)}")
+            # Don't stop the detection phase, just wait and retry
+            time.sleep(5)
+            st.rerun()
 
 elif st.session_state.current_phase == "conversation":
-    # --- Step 1: Initialize graph and trigger first AI response for the FIRST time ---
+    # Initialize conversation if not started
     if not st.session_state.conversation_started:
-        st.session_state.chat_messages = []  # Clear chat for new conversation
-        st.session_state.user_text_input_key = 0  # Reset text input key for new conversation
+        st.session_state.chat_messages = []
+        st.session_state.user_text_input_key = 0
 
+        # Add initial human message
         initial_human_message = HumanMessage(content=f"My name is {st.session_state.visitor_name}")
-        st.session_state.chat_messages.append(initial_human_message)  # Add initial message to display
+        st.session_state.chat_messages.append(initial_human_message)
 
+        # Display the initial human message immediately
+        with chat_container:
+            with st.chat_message("user"):
+                st.write(initial_human_message.content)
+
+        # Initialize graph state
         initial_state = SessionState(
             messages=[initial_human_message],
             authenticated=False,
@@ -517,142 +532,170 @@ elif st.session_state.current_phase == "conversation":
         )
         st.session_state.vbot_graph_state = initial_state
         st.session_state.agent_running = True
-        st.session_state.conversation_started = True  # Mark conversation as started
-        st.session_state.chat_scroll_to_bottom = True  # Prepare to scroll chat
+        st.session_state.conversation_started = True
+        st.session_state.chat_scroll_to_bottom = True
 
-        # IMPORTANT: Invoke graph immediately after initialization for first AI response
         try:
             with status_placeholder.container():
                 with st.spinner("VBot thinking..."):
-                    # Use the just-initialized state for the first invocation
                     new_graph_state = graph.invoke(st.session_state.vbot_graph_state)
 
             st.session_state.vbot_graph_state = new_graph_state
-            # Add new messages generated by the graph invocation to chat history
-            # Only add messages that are not already in chat_messages to avoid duplicates
+            # Only add non-None messages to chat history
             new_messages_from_graph = [
                 msg for msg in new_graph_state["messages"]
-                if msg not in st.session_state.chat_messages
+                if msg not in st.session_state.chat_messages and 
+                (not isinstance(msg, AIMessage) or msg.content is not None)
             ]
             st.session_state.chat_messages.extend(new_messages_from_graph)
 
-            # Explicitly display new AI messages to chat_container and speak them
-            # This is done here to ensure immediate display before rerun.
+            # Display new messages
             with chat_container:
                 for msg in new_messages_from_graph:
-                    if isinstance(msg, AIMessage):
+                    if isinstance(msg, AIMessage) and msg.content:
                         with st.chat_message("assistant"):
-                            st.write(
-                                msg.content if msg.content else "[AI message - no content]")  # Use fallback for display too
-                        if msg.content:  # Speak only if content is not empty
-                            speak_text(msg.content)
-                    # Tool messages are internal processing, not conversational output for the user
-                    # These are usually not displayed to the user in the main chat flow
-                    # elif isinstance(msg, ToolMessage):
-                    #     with st.chat_message("tool"):
-                    #         st.write(f"Tool Output (Internal):") # Label as internal
-                    #         try:
-                    #             st.json(json.loads(msg.content))
-                    #         except json.JSONDecodeError:
-                    #             st.write(msg.content)
+                            st.write(msg.content)
+                        speak_text(msg.content)
 
-            st.rerun()  # Trigger rerun to display the initial AI response and trigger next loop
+            st.rerun()
         except Exception as e:
             st.error(f"Error during initial agent invocation: {e}")
             st.session_state.agent_running = False
             st.session_state.current_phase = "setup"
             st.stop()
 
-    # --- Step 2: Handle ongoing conversation based on state ---
-    # Retrieve current_graph_state safely for all subsequent logic in this block
+    # Handle ongoing conversation
     current_graph_state = st.session_state.vbot_graph_state
-    if current_graph_state is None:  # Defensive check, should ideally not be hit with conversation_started flag
+    if current_graph_state is None:
         st.error("VBot graph state is unexpectedly None during ongoing conversation. Re-starting.")
         st.session_state.current_phase = "setup"
         st.session_state.agent_running = False
         st.session_state.conversation_started = False
         st.stop()
 
-    # If conversation is finished, display info and transition back
+    # Check if conversation is finished
     if current_graph_state.get("finished", False):
         st.info("VBot conversation finished. Returning to detection mode in 5 seconds...")
         st.session_state.agent_running = False
         st.session_state.current_phase = "detection"
-        st.session_state.conversation_started = False  # Reset flag for next conversation
-        st.session_state.chat_scroll_to_bottom = True  # Prepare to scroll chat for final message
-        # Ensure the final message is displayed before transitioning
+        st.session_state.conversation_started = False
+        st.session_state.chat_scroll_to_bottom = True
+        
         if st.session_state.vbot_graph_state and st.session_state.vbot_graph_state["messages"]:
             final_msg = st.session_state.vbot_graph_state["messages"][-1]
-            # Only display AIMessage content, not internal ToolMessages
-            if isinstance(final_msg, AIMessage) and final_msg not in st.session_state.chat_messages:
+            if isinstance(final_msg, AIMessage) and final_msg.content and final_msg not in st.session_state.chat_messages:
                 st.session_state.chat_messages.append(final_msg)
-        time.sleep(5)  # Give user a moment to read the final message
-        st.rerun()  # Trigger rerun to switch back to detection phase
+        
+        # Clear chat messages for next interaction
+        st.session_state.chat_messages = []
+        st.session_state.user_text_input_key = 0
+        st.session_state.visitor_name = None
+        st.session_state.vbot_graph_state = None
+        
+        # Wait 5 seconds before restarting detection
+        time.sleep(5)
+        
+        # Reinitialize camera for detection
+        try:
+            st.session_state.cap = cv2.VideoCapture(0)
+            if not st.session_state.cap.isOpened():
+                st.error("Failed to reinitialize camera. Please check permissions.")
+                st.session_state.current_phase = "setup"
+                st.stop()
+            st.session_state.camera_active = True
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error reinitializing camera: {str(e)}")
+            st.session_state.current_phase = "setup"
+            st.stop()
 
-    # Continue if agent is running and conversation is NOT finished
+    # Handle ongoing conversation flow
     elif st.session_state.agent_running:
-        # Check if it's currently a human turn (graph indicates 'human' as next_node)
-        # and we are not currently processing user input (which happens after 'Send' click)
-        current_graph_state = st.session_state.vbot_graph_state
         next_node_options = graph.get_next_steps(current_graph_state)
 
+        # Show text input if it's human's turn
         if "human" in next_node_options:
-            # If graph expects human input, display the text input and send button
-            # We explicitly *don't* call graph.invoke() here.
-            pass  # UI elements are outside this block, just above
+            user_text_input = st.text_input(
+                "Your response:",
+                key=f"user_text_input_{st.session_state.user_text_input_key}"
+            )
 
-        # If it's not a human turn, and we are not listening for user input, then auto-progress
-        elif not st.session_state.listening_for_user:  # This condition is now about auto-progression
-            # This block automatically invokes the graph if the last message in chat was from the AI
-            # or a Tool, meaning VBot needs to continue its internal processing (e.g., tool outputs,
-            # or another AI turn). If the last message is a HumanMessage (and not processed yet), it waits.
-            if st.session_state.chat_messages and \
-                    (isinstance(st.session_state.chat_messages[-1], AIMessage) or \
-                     isinstance(st.session_state.chat_messages[-1], ToolMessage)):
+            if st.button("Send", key="send_text_button"):
+                if user_text_input:
+                    user_message = HumanMessage(content=user_text_input)
+                    current_graph_state["messages"].append(user_message)
+                    st.session_state.chat_messages.append(user_message)
+                    st.session_state.chat_scroll_to_bottom = True
+                    st.session_state.user_text_input_key += 1
 
-                # If next_node is NOT 'human' (meaning it's 'tools' or 'chatbot' for internal processing),
-                # then automatically invoke the graph.
-                if "human" not in next_node_options:  # Ensure it's not a human turn
                     try:
                         with status_placeholder.container():
                             with st.spinner("VBot thinking..."):
                                 new_graph_state = graph.invoke(current_graph_state)
 
                         st.session_state.vbot_graph_state = new_graph_state
+                        # Only add non-None messages to chat history
                         new_messages_from_graph = [
                             msg for msg in new_graph_state["messages"]
-                            if msg not in st.session_state.chat_messages
+                            if msg not in st.session_state.chat_messages and 
+                            (not isinstance(msg, AIMessage) or msg.content is not None)
                         ]
                         st.session_state.chat_messages.extend(new_messages_from_graph)
-                        st.session_state.chat_scroll_to_bottom = True  # Prepare to scroll chat
+                        st.session_state.chat_scroll_to_bottom = True
 
-                        # Explicitly display new AI messages to chat_container
+                        # Display new messages
                         with chat_container:
                             for msg in new_messages_from_graph:
-                                if isinstance(msg, AIMessage):
-                                    if msg.content:
-                                        with st.chat_message("assistant"):
-                                            st.write(msg.content)
-                                        speak_text(msg.content)
-                                # Tool messages are internal processing, not conversational output for the user
-                                # elif isinstance(msg, ToolMessage):
-                                #     with st.chat_message("tool"):
-                                #         st.write(f"Tool Output (Internal):")
-                                #         try:
-                                #             st.json(json.loads(msg.content))
-                                #         except json.JSONDecodeError:
-                                #             st.write(msg.content)
+                                if isinstance(msg, AIMessage) and msg.content:
+                                    with st.chat_message("assistant"):
+                                        st.write(msg.content)
+                                    speak_text(msg.content)
 
-                        st.rerun()  # Trigger rerun to display new messages and continue auto-flow
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error during agent interaction: {e}")
+                        st.session_state.agent_running = False
+                        st.session_state.current_phase = "setup"
+                        st.stop()
+                else:
+                    st.warning("Please enter some text.")
+
+        # Auto-progress if not human's turn
+        elif not st.session_state.listening_for_user:
+            if st.session_state.chat_messages and \
+                    (isinstance(st.session_state.chat_messages[-1], AIMessage) or \
+                     isinstance(st.session_state.chat_messages[-1], ToolMessage)):
+
+                if "human" not in next_node_options:
+                    try:
+                        with status_placeholder.container():
+                            with st.spinner("VBot thinking..."):
+                                new_graph_state = graph.invoke(current_graph_state)
+
+                        st.session_state.vbot_graph_state = new_graph_state
+                        # Only add non-None messages to chat history
+                        new_messages_from_graph = [
+                            msg for msg in new_graph_state["messages"]
+                            if msg not in st.session_state.chat_messages and 
+                            (not isinstance(msg, AIMessage) or msg.content is not None)
+                        ]
+                        st.session_state.chat_messages.extend(new_messages_from_graph)
+                        st.session_state.chat_scroll_to_bottom = True
+
+                        # Display new messages
+                        with chat_container:
+                            for msg in new_messages_from_graph:
+                                if isinstance(msg, AIMessage) and msg.content:
+                                    with st.chat_message("assistant"):
+                                        st.write(msg.content)
+                                    speak_text(msg.content)
+
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Error during agent auto-processing: {e}")
                         st.session_state.agent_running = False
                         st.session_state.current_phase = "setup"
                         st.stop()
-            # If the last message was a HumanMessage, it means we are awaiting user input.
-            # No graph invoke or rerun needed here. The text input field is shown by the UI block above.
-            else:
-                pass
 
 
 
