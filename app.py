@@ -413,6 +413,75 @@ with col3:
         st.session_state.current_enrollment_index = 0
         st.rerun()
     
+    # Display and manage existing people
+    st.markdown("---")
+    st.subheader("Manage Enrolled People")
+    
+    if st.session_state.collection:
+        try:
+            # Get all items from collection
+            all_items = st.session_state.collection.get(include=['metadatas', 'embeddings'])
+            if all_items and all_items['metadatas']:
+                # Group by name to show unique people
+                people_dict = {}
+                for idx, metadata in enumerate(all_items['metadatas']):
+                    name = metadata.get('name', 'Unknown')
+                    if name not in people_dict:
+                        people_dict[name] = {
+                            'count': 1,
+                            'first_embedding': all_items['embeddings'][idx]
+                        }
+                    else:
+                        people_dict[name]['count'] += 1
+
+                # Display each person with their count and management options
+                for name, data in people_dict.items():
+                    with st.expander(f"👤 {name} ({data['count']} photos)"):
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            new_name = st.text_input(
+                                "Change label:",
+                                value=name,
+                                key=f"rename_{name}"
+                            )
+                        with col2:
+                            if st.button("Update", key=f"update_{name}"):
+                                if new_name and new_name != name:
+                                    # Update all entries with this name
+                                    try:
+                                        # Get all items with the old name
+                                        items = st.session_state.collection.get(
+                                            where={"name": name},
+                                            include=['metadatas', 'embeddings']
+                                        )
+                                        if items and items['metadatas']:
+                                            # Update each item with the new name
+                                            for idx, metadata in enumerate(items['metadatas']):
+                                                metadata['name'] = new_name
+                                                st.session_state.collection.update(
+                                                    ids=[items['ids'][idx]],
+                                                    metadatas=[metadata]
+                                                )
+                                        st.success(f"Updated {name} to {new_name}")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error updating name: {str(e)}")
+                            
+                            if st.button("Delete", key=f"delete_{name}"):
+                                try:
+                                    # Delete all entries with this name
+                                    st.session_state.collection.delete(
+                                        where={"name": name}
+                                    )
+                                    st.success(f"Deleted all entries for {name}")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error deleting entries: {str(e)}")
+        except Exception as e:
+            st.warning(f"Error loading enrolled people: {str(e)}")
+    else:
+        st.info("No face database available. Please enroll some faces first.")
+    
     # Owner status controls
     st.markdown("---")
     st.subheader("Owner Settings")
@@ -555,7 +624,7 @@ elif st.session_state.current_phase == "conversation":
                     if isinstance(msg, AIMessage) and msg.content:
                         with st.chat_message("assistant"):
                             st.write(msg.content)
-                        speak_text(msg.content)
+                            speak_text(msg.content)
 
             st.rerun()
         except Exception as e:
@@ -611,91 +680,75 @@ elif st.session_state.current_phase == "conversation":
 
     # Handle ongoing conversation flow
     elif st.session_state.agent_running:
+        # Get the next possible nodes from the graph
         next_node_options = graph.get_next_steps(current_graph_state)
+        print(f"\nDEBUG: Next node options: {next_node_options}")  # Debug print
 
-        # Show text input if it's human's turn
-        if "human" in next_node_options:
-            user_text_input = st.text_input(
-                "Your response:",
-                key=f"user_text_input_{st.session_state.user_text_input_key}"
-            )
+        # Process the graph step first to get any new messages
+        try:
+            with status_placeholder.container():
+                with st.spinner("VBot thinking..."):
+                    new_graph_state = graph.invoke(current_graph_state)
 
-            if st.button("Send", key="send_text_button"):
-                if user_text_input:
-                    user_message = HumanMessage(content=user_text_input)
-                    current_graph_state["messages"].append(user_message)
-                    st.session_state.chat_messages.append(user_message)
-                    st.session_state.chat_scroll_to_bottom = True
-                    st.session_state.user_text_input_key += 1
+            st.session_state.vbot_graph_state = new_graph_state
+            # Only add non-None messages to chat history
+            new_messages_from_graph = [
+                msg for msg in new_graph_state["messages"]
+                if msg not in st.session_state.chat_messages and 
+                (not isinstance(msg, AIMessage) or msg.content is not None)
+            ]
+            st.session_state.chat_messages.extend(new_messages_from_graph)
+            st.session_state.chat_scroll_to_bottom = True
 
-                    try:
-                        with status_placeholder.container():
-                            with st.spinner("VBot thinking..."):
-                                new_graph_state = graph.invoke(current_graph_state)
+            # Display all messages in chat container
+            with chat_container:
+                for msg in st.session_state.chat_messages:
+                    if isinstance(msg, HumanMessage):
+                        with st.chat_message("user"):
+                            st.write(msg.content)
+                    elif isinstance(msg, AIMessage) and msg.content:
+                        with st.chat_message("assistant"):
+                            st.write(msg.content)
+                            speak_text(msg.content)
 
-                        st.session_state.vbot_graph_state = new_graph_state
-                        # Only add non-None messages to chat history
-                        new_messages_from_graph = [
-                            msg for msg in new_graph_state["messages"]
-                            if msg not in st.session_state.chat_messages and 
-                            (not isinstance(msg, AIMessage) or msg.content is not None)
-                        ]
-                        st.session_state.chat_messages.extend(new_messages_from_graph)
+            # Check if we're in the human node
+            is_human_turn = "human" in next_node_options
+            print(f"DEBUG: Is human turn: {is_human_turn}")  # Debug print
+
+            if is_human_turn:
+                print("DEBUG: Waiting for human input")  # Debug print
+                
+                # Add text input at the bottom
+                user_text_input = st.text_input(
+                    "Your response:",
+                    key=f"user_text_input_{st.session_state.user_text_input_key}"
+                )
+
+                if st.button("Send", key="send_text_button"):
+                    if user_text_input:
+                        print(f"DEBUG: User input received: {user_text_input}")  # Debug print
+                        user_message = HumanMessage(content=user_text_input)
+                        current_graph_state["messages"].append(user_message)
+                        st.session_state.chat_messages.append(user_message)
                         st.session_state.chat_scroll_to_bottom = True
-
-                        # Display new messages
-                        with chat_container:
-                            for msg in new_messages_from_graph:
-                                if isinstance(msg, AIMessage) and msg.content:
-                                    with st.chat_message("assistant"):
-                                        st.write(msg.content)
-                                    speak_text(msg.content)
-
+                        st.session_state.user_text_input_key += 1
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Error during agent interaction: {e}")
-                        st.session_state.agent_running = False
-                        st.session_state.current_phase = "setup"
-                        st.stop()
+                    else:
+                        st.warning("Please enter some text.")
                 else:
-                    st.warning("Please enter some text.")
+                    # If no input has been provided yet, don't proceed with the graph
+                    print("DEBUG: Waiting for user to click Send")  # Debug print
+                    st.stop()
+            else:
+                # If it's not human's turn, continue processing
+                print("DEBUG: Processing next graph step")  # Debug print
+                st.rerun()
 
-        # Auto-progress if not human's turn
-        elif not st.session_state.listening_for_user:
-            if st.session_state.chat_messages and \
-                    (isinstance(st.session_state.chat_messages[-1], AIMessage) or \
-                     isinstance(st.session_state.chat_messages[-1], ToolMessage)):
-
-                if "human" not in next_node_options:
-                    try:
-                        with status_placeholder.container():
-                            with st.spinner("VBot thinking..."):
-                                new_graph_state = graph.invoke(current_graph_state)
-
-                        st.session_state.vbot_graph_state = new_graph_state
-                        # Only add non-None messages to chat history
-                        new_messages_from_graph = [
-                            msg for msg in new_graph_state["messages"]
-                            if msg not in st.session_state.chat_messages and 
-                            (not isinstance(msg, AIMessage) or msg.content is not None)
-                        ]
-                        st.session_state.chat_messages.extend(new_messages_from_graph)
-                        st.session_state.chat_scroll_to_bottom = True
-
-                        # Display new messages
-                        with chat_container:
-                            for msg in new_messages_from_graph:
-                                if isinstance(msg, AIMessage) and msg.content:
-                                    with st.chat_message("assistant"):
-                                        st.write(msg.content)
-                                    speak_text(msg.content)
-
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error during agent auto-processing: {e}")
-                        st.session_state.agent_running = False
-                        st.session_state.current_phase = "setup"
-                        st.stop()
+        except Exception as e:
+            st.error(f"Error during agent processing: {e}")
+            st.session_state.agent_running = False
+            st.session_state.current_phase = "setup"
+            st.stop()
 
 
 
