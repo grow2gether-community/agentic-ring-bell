@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import time
 
 # This function normalizes a face embedding vector.
 def normalize(vec):
@@ -30,41 +31,46 @@ def estimate_distance(bbox):
     return (KNOWN_FACE_HEIGHT_CM * FOCAL_LENGTH) / height_px if height_px >= MIN_FACE_HEIGHT_PX else float('inf')
 
 
-# This is the main function for the detection cycle.
-def detect_visitor(face_app, collection):
-    cap = cv2.VideoCapture(0)
+#Function to manage camera and get one frame
+def get_camera_feed_and_detect(face_app, collection, cap):
+    """
+    Attempts to read one frame from the camera, detect faces, and recognize.
+    Returns (frame_bytes, detected_name, status_message).
+    """
     if not cap.isOpened():
-        print("❌ Could not open webcam.")
-        return None
+        return None, None, "❌ Error: Camera not opened. Ensure it's not in use and permissions are granted."
 
-    print("\n📷 Camera activated. Looking for visitor...")
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    ret, frame = cap.read()
+    if not ret:
+        return None, None, "❌ Error: Failed to grab frame from camera."
 
-        display_frame = frame.copy()
-        for face in face_app.get(frame):
-            bbox = face.bbox.astype(int)
-            cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (255, 0, 0), 2)
-            if estimate_distance(bbox) < 100:
-                print(f"✅ Visitor detected up close. Capturing...")
-                name, dist = recognize_face(collection, face.embedding)
-                result_text = f"Detected: {name} (Dist: {dist:.2f})"
-                color = (0, 255, 0) if name != "unknown" else (0, 0, 255)
-                cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
-                cv2.putText(display_frame, result_text, (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color,
-                            2)
-                cv2.imshow("Agentic Ringbell - Live View", display_frame)
-                cv2.waitKey(2000)
-                cap.release()
-                cv2.destroyAllWindows()
-                return name
+    display_frame = frame.copy()
+    faces = face_app.get(frame)
 
-        cv2.imshow("Agentic Ringbell - Live View", display_frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+    current_frame_status = "No visitor detected yet."
+    detected_name = None
 
-    cap.release()
-    cv2.destroyAllWindows()
-    return None
+    for face in faces:
+        bbox = face.bbox.astype(int)
+        cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (255, 0, 0), 2) # Blue box
+
+        if estimate_distance(bbox) < 100: # Close enough for detection
+            name, dist = recognize_face(collection, face.embedding)
+
+            if name != "unknown":
+                detected_name = name
+                current_frame_status = f"✅ Visitor identified as: {detected_name} (Dist: {dist:.2f})"
+                color = (0, 255, 0) # Green
+            else:
+                current_frame_status = f"Visitor detected (unknown). (Dist: {dist:.2f})"
+                color = (0, 0, 255) # Red
+
+            cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+            cv2.putText(display_frame, f"{name} (Dist: {dist:.2f})", (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            break # Process only the first close face
+
+    ret, buffer = cv2.imencode('.jpg', display_frame)
+    if ret:
+        return buffer.tobytes(), detected_name, current_frame_status
+    else:
+        return None, None, "❌ Error encoding frame to JPEG."
